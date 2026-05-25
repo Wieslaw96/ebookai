@@ -8,7 +8,7 @@ from app.state import EbookState
 logger = logging.getLogger(__name__)
 
 # Cap on research text injected into the writer prompt.
-_RESEARCH_BUDGET = 4_000
+_RESEARCH_BUDGET = 8_000
 # Cap on style-reference excerpt taken from the last completed chapter.
 _STYLE_SNIPPET = 600
 
@@ -72,10 +72,10 @@ def writer_node(state: EbookState) -> dict:
         f"{revision_block}\n\n"
         "Writing requirements:\n"
         "- Authoritative, engaging non-fiction style — no fluff\n"
-        "- Each subsection: at least 3 substantial paragraphs\n"
+        "- Each subsection: at least 4 substantial paragraphs with concrete details\n"
         "- Ground all claims in the research material provided\n"
         "- Use smooth transitions between subsections\n"
-        "- Target length: 800–1 500 words\n"
+        "- Target length: 1 500–3 000 words\n"
         "- Begin directly with the chapter content (no meta-commentary)\n"
     )
 

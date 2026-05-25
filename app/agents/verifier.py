@@ -9,7 +9,7 @@ _APPROVED_MARKER = "APPROVED"
 _REVISION_MARKER = "REVISION_NEEDED"
 
 # Minimum word count considered acceptable for a chapter draft.
-_MIN_WORDS = 400
+_MIN_WORDS = 1_200
 
 
 def verifier_node(state: EbookState) -> dict:
