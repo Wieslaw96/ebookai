@@ -169,7 +169,9 @@ def run_ebook_factory(
         chapter_id = chapter["id"]
         title = chapter.get("title", f"Chapter {i + 1}")
         body = completed.get(chapter_id, "*(chapter not generated)*")
-        book_parts.append(f"## {i + 1}. {title}\n\n{body}")
+        # Strip any leading heading the LLM may have included to avoid duplicates.
+        body_clean = re.sub(r"^[ \t]*#{1,3}[^\n]*\n+", "", body, count=1).lstrip()
+        book_parts.append(f"## {i + 1}. {title}\n\n{body_clean}")
 
     full_book = "\n\n---\n\n".join(book_parts)
 

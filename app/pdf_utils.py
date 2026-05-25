@@ -3,6 +3,7 @@ import os
 import re
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_JUSTIFY
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
@@ -73,6 +74,7 @@ def markdown_to_pdf_bytes(content: str) -> bytes:
         fontSize=11,
         leading=17,
         spaceAfter=7,
+        alignment=TA_JUSTIFY,
     )
 
     story = []
