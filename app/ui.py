@@ -148,14 +148,28 @@ def _show_result(result: dict) -> None:
     c2.metric("Rozmiar", f"{size_kb:.1f} KB")
     c3.metric("Plik", result["filename"])
 
-    st.download_button(
-        label="📥 Pobierz ebook (.md)",
-        data=content,
-        file_name=result["filename"],
-        mime="text/markdown",
-        use_container_width=True,
-        type="primary",
-    )
+    col_md, col_pdf = st.columns(2)
+    with col_md:
+        st.download_button(
+            label="📥 Pobierz (.md)",
+            data=content,
+            file_name=result["filename"],
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    with col_pdf:
+        pdf_bytes = result.get("pdf_bytes")
+        if pdf_bytes:
+            st.download_button(
+                label="📄 Pobierz (.pdf)",
+                data=pdf_bytes,
+                file_name=result["filename"].replace(".md", ".pdf"),
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+            )
+        else:
+            st.button("📄 PDF niedostępny", disabled=True, use_container_width=True)
 
     with st.expander("👁 Podgląd ebooka"):
         preview = content[:4_000]
@@ -255,10 +269,16 @@ def main() -> None:  # noqa: C901
             )
         elif output_path:
             content = Path(output_path).read_text(encoding="utf-8")
+            from app.pdf_utils import markdown_to_pdf_bytes
+            try:
+                pdf_bytes: bytes | None = markdown_to_pdf_bytes(content)
+            except Exception:
+                pdf_bytes = None
             st.session_state.ebook_result = {
                 "path": output_path,
                 "filename": Path(output_path).name,
                 "content": content,
+                "pdf_bytes": pdf_bytes,
                 "topic": topic.strip(),
             }
 
