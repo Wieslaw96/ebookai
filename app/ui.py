@@ -5,12 +5,17 @@ Run with:
     poetry run streamlit run app/ui.py
 """
 
+# ── Ensure project root is on sys.path when Streamlit runs ui.py directly ─
+import sys as _sys
+import os as _os
+_PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 # ── Environment must be loaded before any app.* import ────────────────────
 import logging
 import os
 import queue as _queue_mod
-import threading
-import time
 import traceback
 from pathlib import Path
 
@@ -74,11 +79,11 @@ def _execute_pipeline(
     max_chapters: int,
     log_placeholder: "st.delta_generator.DeltaGenerator",
 ) -> tuple[str | None, str | None]:
-    """Run ``run_ebook_factory`` in a worker thread; stream logs to the UI.
+    """Run ``run_ebook_factory`` in the main Streamlit thread.
 
-    The worker pushes log records into a ``Queue``; the *main* Streamlit
-    thread drains the queue every 400 ms and updates *log_placeholder*,
-    keeping the browser alive with real-time agent activity.
+    Logs are captured into a queue and displayed all at once when the
+    pipeline finishes.  Running directly in the main thread avoids the
+    sleep-poll loop that froze Streamlit's render cycle on Windows.
 
     Args:
         topic:           The ebook subject.
@@ -89,7 +94,6 @@ def _execute_pipeline(
         ``(output_path, None)`` on success or ``(None, traceback_str)`` on
         error.
     """
-    # Import lazily so graph compilation only happens on first run
     from app.graph import run_ebook_factory  # noqa: PLC0415
 
     log_q: "_queue_mod.Queue[str]" = _queue_mod.Queue(maxsize=2_000)
@@ -101,38 +105,21 @@ def _execute_pipeline(
     app_logger.setLevel(logging.INFO)
     app_logger.addHandler(handler)
 
-    result: dict[str, str] = {}
-
-    def _worker() -> None:
-        try:
-            path = run_ebook_factory(
-                topic=topic,
-                output_dir=".",
-                max_chapters=max_chapters,
-            )
-            result["path"] = path
-        except Exception:  # noqa: BLE001
-            result["error"] = traceback.format_exc()
-
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    path: str | None = None
+    error: str | None = None
+    try:
+        path = run_ebook_factory(topic=topic, output_dir=".", max_chapters=max_chapters)
+    except Exception:  # noqa: BLE001
+        error = traceback.format_exc()
+    finally:
+        app_logger.removeHandler(handler)
 
     log_lines: list[str] = []
-
-    # Poll queue while worker is alive — updates come from the main thread
-    while thread.is_alive():
-        if _drain(log_q, log_lines):
-            log_placeholder.code("\n".join(log_lines), language=None)
-        time.sleep(0.4)
-
-    # Final drain after thread finishes
     _drain(log_q, log_lines)
     if log_lines:
         log_placeholder.code("\n".join(log_lines), language=None)
 
-    app_logger.removeHandler(handler)
-
-    return result.get("path"), result.get("error")
+    return path, error
 
 
 # ══════════════════════════════════════════════════════════════════════════════
