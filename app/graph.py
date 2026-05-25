@@ -105,6 +105,7 @@ def run_ebook_factory(
     topic: str,
     output_dir: str = ".",
     max_chapters: int = 0,
+    outline: list[dict] | None = None,
 ) -> str:
     """Run the full ebook generation pipeline for a given topic.
 
@@ -142,6 +143,8 @@ def run_ebook_factory(
     initial_state: dict[str, Any] = {"topic": topic}
     if max_chapters > 0:
         initial_state["max_chapters"] = max_chapters
+    if outline:
+        initial_state["outline"] = outline  # skips architect node
 
     result: Any = app_graph.invoke(
         initial_state,

@@ -50,7 +50,7 @@ class _QueueHandler(logging.Handler):
         super().__init__()
         self.q = q
 
-    def emit(self, record: logging.LogRecord) -> None:  # noqa: D102
+    def emit(self, record: logging.LogRecord) -> None:
         try:
             self.q.put_nowait(self.format(record))
         except _queue_mod.Full:
@@ -58,7 +58,6 @@ class _QueueHandler(logging.Handler):
 
 
 def _drain(q: "_queue_mod.Queue[str]", target: list) -> bool:
-    """Move all available items from *q* into *target*. Returns True if any."""
     changed = False
     while True:
         try:
@@ -70,7 +69,7 @@ def _drain(q: "_queue_mod.Queue[str]", target: list) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Pipeline runner (called from the Streamlit main thread)
+# Pipeline runner
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -78,23 +77,9 @@ def _execute_pipeline(
     topic: str,
     max_chapters: int,
     log_placeholder: "st.delta_generator.DeltaGenerator",
+    outline: list[dict] | None = None,
 ) -> tuple[str | None, str | None]:
-    """Run ``run_ebook_factory`` in the main Streamlit thread.
-
-    Logs are captured into a queue and displayed all at once when the
-    pipeline finishes.  Running directly in the main thread avoids the
-    sleep-poll loop that froze Streamlit's render cycle on Windows.
-
-    Args:
-        topic:           The ebook subject.
-        max_chapters:    Chapter cap (0 = unlimited).
-        log_placeholder: ``st.empty()`` element for log output.
-
-    Returns:
-        ``(output_path, None)`` on success or ``(None, traceback_str)`` on
-        error.
-    """
-    from app.graph import run_ebook_factory  # noqa: PLC0415
+    from app.graph import run_ebook_factory
 
     log_q: "_queue_mod.Queue[str]" = _queue_mod.Queue(maxsize=2_000)
     handler = _QueueHandler(log_q)
@@ -108,8 +93,13 @@ def _execute_pipeline(
     path: str | None = None
     error: str | None = None
     try:
-        path = run_ebook_factory(topic=topic, output_dir=".", max_chapters=max_chapters)
-    except Exception:  # noqa: BLE001
+        path = run_ebook_factory(
+            topic=topic,
+            output_dir=".",
+            max_chapters=max_chapters,
+            outline=outline,
+        )
+    except Exception:
         error = traceback.format_exc()
     finally:
         app_logger.removeHandler(handler)
@@ -123,21 +113,222 @@ def _execute_pipeline(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UI
+# Session state
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 def _init_session() -> None:
-    defaults = {"ebook_result": None, "running": False}
+    defaults: dict = {
+        "stage": "input",        # input | titles | outline | generating | done
+        "topic": "",
+        "max_chapters": 2,
+        "generated_titles": [],
+        "selected_title": "",
+        "generated_outline": [],
+        "ebook_result": None,
+    }
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
 
 
-def _show_result(result: dict) -> None:
-    """Render the success panel and download button."""
+def _reset() -> None:
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Stage: input
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _stage_input() -> None:
+    topic = st.text_area(
+        label="📚 Temat lub opis ebooka",
+        placeholder="np. Krótka historia i ewolucja kodu kreskowego",
+        height=110,
+        help="Im bardziej szczegółowy opis, tym trafniejszy research i outline.",
+    )
+
+    col_slide, col_badge = st.columns([3, 1])
+    with col_slide:
+        max_chapters = st.slider(
+            label="Liczba rozdziałów",
+            min_value=0,
+            max_value=10,
+            value=2,
+            help=(
+                "**0** = brak limitu (model sam decyduje).  \n"
+                "**1–3** = tryb testowy.  \n"
+                "**4–10** = tryb produkcyjny."
+            ),
+        )
+    with col_badge:
+        if max_chapters == 0:
+            badge_val, badge_delta = "Auto", "bez limitu"
+        elif max_chapters <= 3:
+            badge_val, badge_delta = "Testowy", f"{max_chapters} rozdz."
+        else:
+            badge_val, badge_delta = "Produkcja", f"{max_chapters} rozdz."
+        st.metric("Tryb", badge_val, badge_delta)
+
     st.divider()
-    st.success(f"✅ Ebook **{result['topic']!r}** wygenerowany pomyślnie!")
+
+    if st.button(
+        "💡 Zaproponuj tytuły",
+        type="primary",
+        use_container_width=True,
+        disabled=not topic.strip(),
+    ):
+        with st.spinner("Generuję 5 propozycji tytułów…"):
+            from app.proposals import generate_titles
+            titles = generate_titles(topic.strip())
+        st.session_state.topic = topic.strip()
+        st.session_state.max_chapters = max_chapters
+        st.session_state.generated_titles = titles
+        st.session_state.stage = "titles"
+        st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Stage: titles
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _stage_titles() -> None:
+    st.subheader("Krok 1 z 2 — Wybierz tytuł ebooka")
+    st.caption(f"Temat: *{st.session_state.topic}*")
+    st.divider()
+
+    selected = st.radio(
+        "Propozycje tytułów:",
+        st.session_state.generated_titles,
+        index=0,
+    )
+
+    st.divider()
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("← Zmień temat", use_container_width=True):
+            st.session_state.stage = "input"
+            st.rerun()
+
+    with col2:
+        if st.button(
+            "Wybierz i generuj rozdziały →",
+            type="primary",
+            use_container_width=True,
+        ):
+            with st.spinner("Tworzę propozycję rozdziałów…"):
+                from app.proposals import generate_outline
+                outline = generate_outline(
+                    title=selected,
+                    topic=st.session_state.topic,
+                    max_chapters=st.session_state.max_chapters,
+                )
+            st.session_state.selected_title = selected
+            st.session_state.generated_outline = outline
+            st.session_state.stage = "outline"
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Stage: outline
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _stage_outline() -> None:
+    st.subheader("Krok 2 z 2 — Zatwierdź spis treści")
+    st.markdown(f"**Tytuł:** {st.session_state.selected_title}")
+    st.divider()
+
+    for i, chapter in enumerate(st.session_state.generated_outline):
+        st.markdown(f"**{i + 1}. {chapter['title']}**")
+        for section in chapter.get("sections", []):
+            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• {section['title']}")
+        st.write("")
+
+    st.divider()
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("🔄 Zaproponuj inne rozdziały", use_container_width=True):
+            with st.spinner("Generuję nowy spis treści…"):
+                from app.proposals import generate_outline
+                new_outline = generate_outline(
+                    title=st.session_state.selected_title,
+                    topic=st.session_state.topic,
+                    max_chapters=st.session_state.max_chapters,
+                )
+            st.session_state.generated_outline = new_outline
+            st.rerun()
+
+    with col2:
+        if st.button(
+            "✅ Zatwierdź i pisz ebook",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state.stage = "generating"
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Stage: generating
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _stage_generating() -> None:
+    st.subheader("📡 Logi agentów")
+    st.caption(
+        "Każda linia = jeden krok agenta. "
+        "Weryfikator może odesłać rozdział do poprawek — to normalne."
+    )
+    log_placeholder = st.empty()
+
+    with st.spinner("Agenci pracują… research → pisanie → weryfikacja"):
+        output_path, error = _execute_pipeline(
+            topic=st.session_state.selected_title,
+            max_chapters=st.session_state.max_chapters,
+            log_placeholder=log_placeholder,
+            outline=st.session_state.generated_outline,
+        )
+
+    if error:
+        st.error(f"**Pipeline zakończył się błędem.**\n\n```\n{error}\n```")
+        if st.button("← Wróć do spisu treści"):
+            st.session_state.stage = "outline"
+            st.rerun()
+        return
+
+    if output_path:
+        content = Path(output_path).read_text(encoding="utf-8")
+        from app.pdf_utils import markdown_to_pdf_bytes
+        try:
+            pdf_bytes: bytes | None = markdown_to_pdf_bytes(content)
+        except Exception:
+            pdf_bytes = None
+        st.session_state.ebook_result = {
+            "path": output_path,
+            "filename": Path(output_path).name,
+            "content": content,
+            "pdf_bytes": pdf_bytes,
+            "topic": st.session_state.selected_title,
+        }
+        st.session_state.stage = "done"
+        st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Stage: done
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _stage_done() -> None:
+    result = st.session_state.ebook_result
+    st.divider()
+    st.success(f"✅ Ebook **\"{result['topic']}\"** wygenerowany pomyślnie!")
 
     content: str = result["content"]
     word_count = len(content.split())
@@ -177,114 +368,48 @@ def _show_result(result: dict) -> None:
             preview += "\n\n*… (skrócono dla podglądu)*"
         st.markdown(preview)
 
+    st.divider()
+    if st.button("🔄 Wygeneruj nowy ebook", use_container_width=True):
+        _reset()
+        st.rerun()
 
-def main() -> None:  # noqa: C901
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Main
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def main() -> None:
     _init_session()
 
-    # ── Header ────────────────────────────────────────────────────────────
     st.title("🤖 Fabryka Ebooków Non-Fiction")
     st.caption(
         "Wieloagentowy system AI: "
-        "**Research** → **Outline** → **Pisanie** → **Weryfikacja**"
+        "**Tytuł** → **Rozdziały** → **Research** → **Pisanie** → **Weryfikacja**"
     )
     st.divider()
 
-    # ── API key guard ─────────────────────────────────────────────────────
     if not os.getenv("GEMINI_API_KEY", "").strip():
         st.warning(
             "**Brak klucza GEMINI_API_KEY.**\n\n"
             "1. Skopiuj `.env.example` → `.env`\n"
             "2. Wpisz: `GEMINI_API_KEY=twój_klucz_tu`\n"
-            "3. Zrestartuj aplikację (`Ctrl+C`, potem `poetry run streamlit run app/ui.py`)."
+            "3. Zrestartuj aplikację."
         )
         st.stop()
 
-    # ── Controls ──────────────────────────────────────────────────────────
-    topic = st.text_area(
-        label="📚 Temat lub opis ebooka",
-        placeholder="np. Krótka historia i ewolucja kodu kreskowego",
-        height=110,
-        help="Im bardziej szczegółowy opis, tym trafniejszy research i outline.",
-    )
+    stage = st.session_state.stage
 
-    col_slide, col_badge = st.columns([3, 1])
-    with col_slide:
-        max_chapters = st.slider(
-            label="Liczba rozdziałów",
-            min_value=0,
-            max_value=10,
-            value=2,
-            help=(
-                "**0** = brak limitu (model sam decyduje — może wygenerować 8–12).  \n"
-                "**1–3** = tryb testowy, szybkie generowanie.  \n"
-                "**4–10** = tryb produkcyjny."
-            ),
-        )
-    with col_badge:
-        if max_chapters == 0:
-            badge_val, badge_delta = "Auto", "bez limitu"
-        elif max_chapters <= 3:
-            badge_val, badge_delta = "Testowy", f"{max_chapters} rozdz."
-        else:
-            badge_val, badge_delta = "Produkcja", f"{max_chapters} rozdz."
-        st.metric("Tryb", badge_val, badge_delta)
-
-    st.divider()
-
-    btn_disabled = not topic.strip() or st.session_state.running
-    btn_label = "⏳ Trwa generowanie..." if st.session_state.running else "🚀 Uruchom produkcję"
-
-    clicked = st.button(
-        btn_label,
-        type="primary",
-        use_container_width=True,
-        disabled=btn_disabled,
-    )
-
-    # ── Pipeline execution ────────────────────────────────────────────────
-    if clicked and topic.strip():
-        st.session_state.running = True
-        st.session_state.ebook_result = None
-
-        st.subheader("📡 Logi agentów (na żywo)")
-        st.caption(
-            "Każda linia = jeden krok agenta. "
-            "Weryfikator może odesłać rozdział do poprawek — to normalne."
-        )
-        log_placeholder = st.empty()
-
-        with st.spinner(
-            "Agenci pracują… research → outline → pisanie → weryfikacja"
-        ):
-            output_path, error = _execute_pipeline(
-                topic.strip(), max_chapters, log_placeholder
-            )
-
-        st.session_state.running = False
-
-        if error:
-            st.error(
-                "**Pipeline zakończył się błędem.**\n\n"
-                f"```\n{error}\n```"
-            )
-        elif output_path:
-            content = Path(output_path).read_text(encoding="utf-8")
-            from app.pdf_utils import markdown_to_pdf_bytes
-            try:
-                pdf_bytes: bytes | None = markdown_to_pdf_bytes(content)
-            except Exception:
-                pdf_bytes = None
-            st.session_state.ebook_result = {
-                "path": output_path,
-                "filename": Path(output_path).name,
-                "content": content,
-                "pdf_bytes": pdf_bytes,
-                "topic": topic.strip(),
-            }
-
-    # ── Persistent result panel ───────────────────────────────────────────
-    if st.session_state.ebook_result:
-        _show_result(st.session_state.ebook_result)
+    if stage == "input":
+        _stage_input()
+    elif stage == "titles":
+        _stage_titles()
+    elif stage == "outline":
+        _stage_outline()
+    elif stage == "generating":
+        _stage_generating()
+    elif stage == "done":
+        _stage_done()
 
 
 main()
