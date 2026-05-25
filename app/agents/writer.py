@@ -72,10 +72,11 @@ def writer_node(state: EbookState) -> dict:
         f"{revision_block}\n\n"
         "Writing requirements:\n"
         "- Authoritative, engaging non-fiction style — no fluff\n"
-        "- Each subsection: at least 4 substantial paragraphs with concrete details\n"
+        "- Each subsection: minimum 4 full paragraphs with concrete details, examples, and analysis\n"
         "- Ground all claims in the research material provided\n"
         "- Use smooth transitions between subsections\n"
-        "- Target length: 1 500–3 000 words\n"
+        "- MINIMUM length: 1 500 words. Target: 2 500 words.\n"
+        "- Do NOT truncate, summarise, or skip any subsection — write every one in full\n"
         "- Begin directly with the chapter content (no meta-commentary)\n"
     )
 
@@ -85,8 +86,10 @@ def writer_node(state: EbookState) -> dict:
         config=types.GenerateContentConfig(
             system_instruction=(
                 "You are an expert non-fiction author. Write authoritative, "
-                "precise, and engaging content grounded in the provided research."
+                "precise, and engaging content grounded in the provided research. "
+                "Always write complete, full-length chapters — never cut short."
             ),
+            max_output_tokens=8192,
         ),
     )
 

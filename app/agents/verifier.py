@@ -45,6 +45,20 @@ def verifier_node(state: EbookState) -> dict:
 
     word_count = len(state.current_draft.split())
 
+    # Hard length gate — skip the LLM call entirely for short drafts.
+    if word_count < _MIN_WORDS:
+        logger.info(
+            "[Verifier] REJECTED chapter %d (too short: %d/%d words)",
+            idx + 1, word_count, _MIN_WORDS,
+        )
+        return {
+            "feedback": (
+                f"The chapter is too short ({word_count} words; minimum required: {_MIN_WORDS}). "
+                "Expand every subsection: add more detail, concrete examples, historical context, "
+                f"statistics, and analysis. Do not stop writing until you reach at least {_MIN_WORDS} words."
+            )
+        }
+
     prompt = (
         f"You are a rigorous non-fiction book editor.\n\n"
         f"Book topic: {state.topic}\n"
